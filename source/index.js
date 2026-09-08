@@ -11,8 +11,62 @@ const GENERATOR = Symbol('GENERATOR');
 const STYLER = Symbol('STYLER');
 const IS_EMPTY = Symbol('IS_EMPTY');
 const LEVEL = Symbol('LEVEL');
+const THEMES = Symbol('THEMES');
 
 const styles = Object.create(null);
+
+const defaultThemes = {
+	error: {color: 'red', bold: true},
+	warning: {color: 'yellow'},
+	success: {color: 'green', bold: true},
+	info: {color: 'cyan'},
+};
+
+const applyThemeOptions = (self, options) => {
+	if (typeof options === 'function') {
+		return options;
+	}
+
+	let styled = self;
+
+	if (Array.isArray(options)) {
+		for (const style of options) {
+			if (styled[style]) {
+				styled = styled[style];
+			}
+		}
+
+		return styled;
+	}
+
+	if (typeof options === 'object' && options !== null) {
+		if (options.color) {
+			styled = options.color.startsWith('#')
+				? styled.hex(options.color)
+				: (styled[options.color] ?? styled);
+		}
+
+		if (options.bg) {
+			if (options.bg.startsWith('#')) {
+				styled = styled.bgHex(options.bg);
+			} else {
+				const bgName = options.bg.startsWith('bg')
+					? options.bg
+					: `bg${options.bg[0].toUpperCase() + options.bg.slice(1)}`;
+				styled = styled[bgName] ?? styled;
+			}
+		}
+
+		const modifiers = ['bold', 'underline', 'dim', 'italic', 'inverse', 'strikethrough', 'reset', 'visible', 'hidden'];
+		for (const mod of modifiers) {
+			if (options[mod] && styled[mod]) {
+				styled = styled[mod];
+			}
+		}
+	}
+
+	return styled;
+};
 
 const assertValidLevel = level => {
 	if (!Number.isSafeInteger(level) || level < 0 || level > 3) {
@@ -30,6 +84,43 @@ const levelDescriptor = {
 		assertValidLevel(level);
 		this[LEVEL] = level;
 	},
+};
+
+const themeDescriptor = {
+	enumerable: true,
+	get() {
+		const generator = this[GENERATOR] ?? this;
+		const themes = generator[THEMES];
+
+		return new Proxy({}, {
+			get: (_, prop) => {
+				if (typeof prop !== 'string') {
+					return undefined;
+				}
+
+				const themeConfig = themes?.[prop] ?? defaultThemes[prop];
+				if (themeConfig === undefined) {
+					return undefined;
+				}
+
+				return applyThemeOptions(this, themeConfig);
+			},
+		});
+	},
+};
+
+const addThemeMethod = function (name, options) {
+	if (typeof name !== 'string') {
+		throw new TypeError(`Expected theme name to be a string, got ${typeof name}`);
+	}
+
+	const generator = this[GENERATOR] ?? this;
+	if (!generator[THEMES]) {
+		generator[THEMES] = Object.create(null);
+	}
+
+	generator[THEMES][name] = options;
+	return this;
 };
 
 const applyOptions = (object, options = {}) => {
@@ -52,6 +143,7 @@ export class Chalk {
 const chalkFactory = options => {
 	const chalk = (...strings) => strings.join(' ');
 	applyOptions(chalk, options);
+	chalk[THEMES] = Object.create(null);
 
 	Object.setPrototypeOf(chalk, createChalk.prototype);
 
@@ -146,6 +238,12 @@ const proto = Object.defineProperties(
 				this[GENERATOR].level = level;
 			},
 		},
+		theme: themeDescriptor,
+		addTheme: {
+			value: addThemeMethod,
+			enumerable: true,
+			writable: true,
+		},
 	},
 );
 
@@ -234,7 +332,16 @@ const applyStyle = (self, string) => {
 
 // `level` lives on the prototype rather than on each instance, so it costs nothing to construct an instance and matches how builders already expose it. It is inherited rather than own, so it does not show up in `Object.keys()`, same as for a builder.
 // eslint-disable-next-line unicorn/no-top-level-side-effects -- The style getters must be installed at module load.
-Object.defineProperties(createChalk.prototype, {...styles, level: levelDescriptor});
+Object.defineProperties(createChalk.prototype, {
+	...styles,
+	level: levelDescriptor,
+	theme: themeDescriptor,
+	addTheme: {
+		value: addThemeMethod,
+		enumerable: true,
+		writable: true,
+	},
+});
 
 const chalk = createChalk();
 export const chalkStderr = createChalk({level: stderrColor ? stderrColor.level : 0});
